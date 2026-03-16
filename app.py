@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import requests
+from requests import RequestException
 
 ASSETS_DIR = Path(__file__).parent / "assets" / "open_api_specs"
 TENANTS = {
@@ -33,6 +34,23 @@ def run_authentication(timeout: float = 30.0) -> int:
     results = {}
     overall_ok = True
 
+    missing_env_vars = []
+    for alias, tenant in TENANTS.items():
+        required_env_vars = (
+            tenant["username_env"],
+            tenant["password_env"],
+            tenant["company_env"],
+        )
+        for env_var in required_env_vars:
+            if not os.getenv(env_var):
+                missing_env_vars.append((alias, env_var))
+
+    if missing_env_vars:
+        print("Missing required environment variables:")
+        for alias, env_var in missing_env_vars:
+            print(f"- {alias}: {env_var}")
+        return 1
+
     for alias, tenant in TENANTS.items():
         try:
             with (ASSETS_DIR / tenant["spec_file"]).open("r", encoding="utf-8") as handle:
@@ -53,9 +71,6 @@ def run_authentication(timeout: float = 30.0) -> int:
                 "company": os.getenv(tenant["company_env"], ""),
                 "branch": os.getenv(tenant["branch_env"], ""),
             }
-            missing = [field for field in ("name", "password", "company") if not credentials[field]]
-            if missing:
-                raise ValueError(f"Missing credentials ({', '.join(missing)})")
 
             with requests.Session() as session:
                 response = session.post(login_url, json=credentials, timeout=timeout)
@@ -63,6 +78,16 @@ def run_authentication(timeout: float = 30.0) -> int:
                 session.post(logout_url, timeout=timeout)
 
             results[alias] = f"ok ({response.status_code})"
+        except requests.HTTPError as exc:
+            overall_ok = False
+            status = exc.response.status_code if exc.response is not None else "unknown"
+            error_text = exc.response.text.strip() if exc.response is not None else str(exc)
+            if len(error_text) > 300:
+                error_text = f"{error_text[:300]}..."
+            results[alias] = f"failed: http {status} - {error_text or 'no response body'}"
+        except RequestException as exc:
+            overall_ok = False
+            results[alias] = f"failed: request error - {exc}"
         except Exception as exc:
             overall_ok = False
             results[alias] = f"failed: {exc}"
