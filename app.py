@@ -1,3 +1,5 @@
+"""Single-script tenant authentication check using OpenAPI server URLs."""
+
 import json
 import os
 import sys
